@@ -2,10 +2,10 @@
 
 ## 1. Giới thiệu tổng quan
 
-Bài thực hành này thực hiện thiết kế và phát triển **Dịch vụ Quản lý Đơn hàng (`svc-order`)** bằng framework **NestJS (TypeScript)**, tuân thủ chặt chẽ các nguyên tắc của kiến trúc hướng dịch vụ (**Service-Oriented Architecture - SOA**):
+Bài thực hành này thực hiện thiết kế và phát triển **Dịch vụ Quản lý Đơn hàng (`svc-order`)** bằng framework **NestJS (TypeScript)**, tuân thủ chặt chẽ các nguyên tắc của kiến trúc hướng dịch vụ 
 - **Phân tách trách nhiệm**: Mỗi service đảm nhận một nghiệp vụ chuyên biệt, sở hữu cơ sở dữ liệu độc lập.
 - **Tính tự chủ và đóng gói**: Không truy vấn trực tiếp cơ sở dữ liệu của nhau, không sử dụng Foreign Key chéo database; toàn bộ giao tiếp giữa các service diễn ra qua giao thức HTTP RESTful API.
-- **xác thực**: `svc-order` không tự giải mã JWT hay lưu secret key, mà ủy quyền kiểm tra tính hợp lệ của token cho dịch vụ xác thực trung tâm.
+- **Ủy quyền xác thực**: `svc-order` không tự giải mã JWT hay lưu secret key, mà ủy quyền kiểm tra tính hợp lệ của token cho dịch vụ xác thực trung tâm qua HTTP.
 
 ---
 
@@ -76,11 +76,16 @@ Soa_BTH4/
 └── README.md                     # Tài liệu tổng quan này
 ```
 
-
+---
 
 ## 4. Hướng dẫn cài đặt & Khởi chạy hệ thống
 
 ### Bước 1: Khởi tạo Cơ sở dữ liệu `SOA_Order`
+
+Chạy script T-SQL trong SSMS hoặc sqlcmd:
+```powershell
+sqlcmd -S "LAPTOP-TUNWS\VIETTUAN" -E -i "C:\work_space\Soa_BTH4\svc-order\database\SOA_Order.sql"
+```
 
 ### Bước 2: Khởi động Dịch vụ Xác thực (`svc-auth` - Port 3004)
 
@@ -92,9 +97,7 @@ cd C:\work_space\nest-js-soa\svc-auth
 npm install
 npm run start:dev
 ```
-*Service sẽ chạy tại: `http://localhost:3004` (Swagger: `http://localhost:3004/api`)*
-
----
+*Service chạy tại: `http://localhost:3004` (Swagger: `http://localhost:3004/api`)*
 
 ### Bước 3: Khởi động Dịch vụ Sản phẩm (`svc-product` - Port 3005)
 
@@ -104,9 +107,7 @@ cd C:\work_space\nest-js-soa\svc-product
 npm install
 npm run start:dev
 ```
-*Service sẽ chạy tại: `http://localhost:3005` (Swagger: `http://localhost:3005/api`)*
-
----
+*Service chạy tại: `http://localhost:3005` (Swagger: `http://localhost:3005/api`)*
 
 ### Bước 4: Khởi động Dịch vụ Quản lý Đơn hàng (`svc-order` - Port 3006)
 
@@ -116,7 +117,7 @@ cd C:\work_space\Soa_BTH4\svc-order
 npm install
 npm run start:dev
 ```
-*Service sẽ chạy tại: `http://localhost:3006` (Swagger: `http://localhost:3006/api`)*
+*Service chạy tại: `http://localhost:3006` (Swagger: `http://localhost:3006/api`)*
 
 ---
 
@@ -143,9 +144,45 @@ Tất cả các API dưới đây đều được bảo vệ bởi `AuthGuard` v
 | `PUT` | `/order_items/:id` | Cập nhật số lượng/sản phẩm (tính lại đơn giá và tổng tiền đơn cha) |
 | `DELETE`| `/order_items/:id` | Xóa mặt hàng khỏi đơn (tự động trừ tổng tiền đơn cha tương ứng) |
 
+---
 
-## 8. Kết luận & Điểm nổi bật về kiến trúc SOA trong bài làm
+## 6. Kết luận & Điểm nổi bật về kiến trúc SOA trong bài làm
 
 1. **Tuân thủ triệt để SOA**: Dịch vụ `svc-order` hoàn toàn độc lập, giao tiếp với [svc-auth](https://github.com/tuwns05/nest-js-soa/tree/main/svc-auth) và `svc-product` qua HTTP REST API.
 2. **Không chia sẻ Database hay Secrets**: Không sử dụng Foreign Key chéo database, không giải mã JWT nội bộ và không dùng chung JWT secret key.
-3. **Độ tin cậy cao**: Tích hợp kiểm tra số lượng tồn kho tự động, cơ chế SQL Transaction toàn vẹn dữ liệu và kiểm thử tự động đạt 100% test pass.
+3. **Độ tin cậy cao**: Tích hợp kiểm tra số lượng tồn kho tự động, cơ chế SQL Transaction toàn vẹn dữ liệu.
+
+---
+
+## 7. Cơ chế xử lý gọi Dịch vụ Xác thực (`svc-auth`)
+
+`svc-order` ủy quyền xác thực hoàn toàn cho [svc-auth (cổng 3004)](https://github.com/tuwns05/nest-js-soa/tree/main/svc-auth) qua HTTP (tuân thủ SOA: không giải mã JWT, không giữ secret key, không truy cập CSDL auth).
+
+### 7.1. Sơ đồ luồng xử lý (`AuthGuard`)
+
+```
+[ Client ]
+    │
+    │ 1. Request + Header: Authorization: Bearer <token>
+    ▼
+[ AuthGuard (svc-order) ]
+    │
+    ├── Thiếu header hoặc sai định dạng? ──────> [ 401 Unauthorized ]
+    │
+    │ 2. Forward: GET http://localhost:3004/auth/profile (timeout: 3s)
+    ▼
+[ svc-auth (cổng 3004) ]
+    │
+    ├── 200 OK (Token hợp lệ) ────────> req.user = data ──> [ Vào Controller ]
+    ├── 401/403 (Token sai/hết hạn) ──────────────────────> [ 401 Unauthorized ]
+    └── Mất kết nối / Timeout 3s ─────────────────────────> [ 503 Service Unavailable ]
+```
+
+### 7.2. Ba bước xử lý cốt lõi (`src/auth/auth.guard.ts`)
+
+1. **Lọc Header tại chỗ**: Kiểm tra `request.headers.authorization`. Nếu thiếu hoặc không bắt đầu bằng `Bearer `, lập tức trả về `401 Unauthorized` (chặn ngay request rác).
+2. **Gọi HTTP sang `svc-auth`**: Chuyển tiếp nguyên văn header `Authorization` sang `GET http://localhost:3004/auth/profile` với `timeout: 3000ms` qua `axios`.
+3. **Phân loại phản hồi**:
+   - **`200 OK`**: Hợp lệ $\rightarrow$ Gán `req.user = response.data`, cho phép request vào Controller.
+   - **`401 / 403`**: Token sai hoặc hết hạn $\rightarrow$ Trả về `401 Unauthorized`.
+   - **Mất kết nối / Timeout 3s**: `svc-auth` tắt hoặc không phản hồi $\rightarrow$ Trả về `503 Service Unavailable`.

@@ -93,20 +93,35 @@ npm run start:dev
 
 ---
 
-## 6. Lệnh kiểm thử
+## 6. Cơ chế xử lý gọi Dịch vụ Xác thực (`svc-auth`)
 
-### Kiểm thử Unit Test (Vitest)
-```powershell
-npm test
+`svc-order` ủy quyền xác thực hoàn toàn cho [svc-auth (cổng 3004)](https://github.com/tuwns05/nest-js-soa/tree/main/svc-auth) qua HTTP (tuân thủ SOA: không giải mã JWT, không giữ secret key, không truy cập CSDL auth).
+
+### 6.1. Sơ đồ luồng xử lý (`AuthGuard`)
+
 ```
-*Chạy 22/22 unit tests bao phủ toàn bộ AuthGuard, OrdersService và OrderItemsService.*
-
-### Kiểm thử tích hợp qua PowerShell
-```powershell
-# 1. Đăng nhập tại svc-auth lấy token
-$login = Invoke-RestMethod -Uri "http://localhost:3004/auth/login" -Method POST -ContentType "application/json" -Body '{"UserName":"admin","Password":"123456"}'
-$token = $login.access_token
-
-# 2. Gọi svc-order với token
-Invoke-RestMethod -Uri "http://localhost:3006/orders" -Headers @{ Authorization = "Bearer $token" }
+[ Client ]
+    │
+    │ 1. Request + Header: Authorization: Bearer <token>
+    ▼
+[ AuthGuard (svc-order) ]
+    │
+    ├── Thiếu header hoặc sai định dạng? ──────> [ 401 Unauthorized ]
+    │
+    │ 2. Forward: GET http://localhost:3004/auth/profile (timeout: 3s)
+    ▼
+[ svc-auth (cổng 3004) ]
+    │
+    ├── 200 OK (Token hợp lệ) ────────> req.user = data ──> [ Vào Controller ]
+    ├── 401/403 (Token sai/hết hạn) ──────────────────────> [ 401 Unauthorized ]
+    └── Mất kết nối / Timeout 3s ─────────────────────────> [ 503 Service Unavailable ]
 ```
+
+### 6.2. Ba bước xử lý cốt lõi (`src/auth/auth.guard.ts`)
+
+1. **Lọc Header tại chỗ**: Kiểm tra `request.headers.authorization`. Nếu thiếu hoặc không bắt đầu bằng `Bearer `, lập tức trả về `401 Unauthorized` (chặn ngay request rác).
+2. **Gọi HTTP sang `svc-auth`**: Chuyển tiếp nguyên văn header `Authorization` sang `GET http://localhost:3004/auth/profile` với `timeout: 3000ms` qua `axios`.
+3. **Phân loại phản hồi**:
+   - **`200 OK`**: Hợp lệ $\rightarrow$ Gán `req.user = response.data`, cho phép request vào Controller.
+   - **`401 / 403`**: Token sai hoặc hết hạn $\rightarrow$ Trả về `401 Unauthorized`.
+   - **Mất kết nối / Timeout 3s**: `svc-auth` tắt hoặc không phản hồi $\rightarrow$ Trả về `503 Service Unavailable`.
